@@ -1,0 +1,403 @@
+import os
+
+from cs50 import SQL
+from flask import Flask, flash, redirect, render_template, request, session
+from flask_session import Session
+from tempfile import mkdtemp
+from werkzeug.security import check_password_hash, generate_password_hash
+from helpers import apology, login_required, lookup, usd
+
+# Configure application
+app = Flask(__name__)
+
+# Ensure templates are auto-reloaded
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+
+
+
+# Configure session to use filesystem (instead of signed cookies)
+app.config["SESSION_PERMANENT"] = False
+app.config["SESSION_TYPE"] = "filesystem"
+Session(app)
+
+# Configure CS50 Library to use SQLite database
+db = SQL("sqlite:///finance.db")
+
+# Make sure API key is set
+if not os.environ.get("API_KEY"):
+    raise RuntimeError("API_KEY not set")
+
+
+@app.after_request
+def after_request(response):
+    """Ensure responses aren't cached"""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Expires"] = 0
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.route("/")
+@login_required
+def index():
+    """Show portfolio of stocks"""
+    user_cash = db.execute("SELECT cash FROM users WHERE id = ?", session["user_id"],)
+    stocks = db.execute("SELECT symbol, SUM(shares) as shares, operation FROM stocks WHERE userID = ? GROUP BY symbol HAVING (SUM(shares)) > 0;",session["user_id"],)
+    total_cash_stocks = 0
+
+    for stock in stocks:
+        quote = lookup(stock["symbol"])
+        stock["name"] = quote["name"]
+        stock["price"] = quote["price"]
+        stock["total"] = stock["price"] * stock["shares"]
+        total_cash_stocks = total_cash_stocks + stock["total"]
+
+    total_cash = total_cash_stocks + user_cash[0]["cash"]
+    return render_template("index.html", stocks=stocks, user_cash=user_cash[0], total_cash=total_cash)
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """Log user in"""
+
+    # Forget any user_id
+    session.clear()
+
+    # User reached route via POST (as by submitting a form via POST)
+    if request.method == "POST":
+
+        # Ensure username was submitted
+        if not request.form.get("username"):
+            return apology("must provide username", 403)
+
+        # Ensure password was submitted
+        elif not request.form.get("password"):
+            return apology("must provide password", 403)
+
+        # Query database for username
+        rows = db.execute("SELECT * FROM users WHERE username = ?", request.form.get("username"))
+
+        # Ensure username exists and password is correct
+        if len(rows) != 1 or not check_password_hash(rows[0]["hash"], request.form.get("password")):
+            return apology("invalid username and/or password", 403)
+
+        # Remember which user has logged in
+        session["user_id"] = rows[0]["id"]
+
+        # Redirect user to home page
+        return redirect("/")
+
+    # User reached route via GET (as by clicking a link or via redirect)
+    else:
+        return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    """Log user out"""
+
+    # Forget any user_id
+    session.clear()
+
+    # Redirect user to login form
+    return redirect("/")
+
+
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    #"""Register user"""
+    # User reached route via POST (as by submitting a form via POST)
+    if request.method == "POST":
+
+        username = request.form.get("username")
+        password = request.form.get("password")
+        confirmation = request.form.get("confirmation")
+        rows = db.execute("SELECT * FROM users WHERE username = ?", username)
+
+        #check if user enter username when register
+        if not username:
+            return apology("Please enter username", 400)
+        elif len(rows) != 0:
+            return apology("username was taken", 400)
+
+        #check if user enter password when register
+        elif not password:
+            return apology("Please enter password", 400)
+
+        #check if confirmation password match with origin password
+        elif not password == confirmation:
+            return apology("passwords must match", 400)
+
+        #if there is no error, insert username and password into DB
+        else:
+            # Generate the hash of the password
+            hash = generate_password_hash(password, method="pbkdf2:sha256", salt_length=8)
+
+            # Insert the new user
+            db.execute("INSERT INTO users (username, hash) VALUES (?, ?) ", username, hash )
+            # Redirect user to home page
+            return redirect("/")
+
+        #if user reach route via Get, redirect to register page.
+    else:
+        return render_template("register.html")
+
+
+@app.route("/change", methods=["GET", "POST"])
+@login_required
+def change():
+    if request.method == "POST":
+        input_password = request.form.get("old_password")              #getting user input
+        new_password = request.form.get("new_password")
+        password_confirmation = request.form.get("new_password")
+
+
+        new_password_hash = generate_password_hash(new_password, method="pbkdf2:sha256", salt_length=8)                 #getting hash of user new password
+        user_current_password_hash = db.execute("SELECT hash FROM users WHERE id = ?", session["user_id"]) #get user password hash
+
+        #check if user missin any fields:
+        if not input_password or not new_password or not password_confirmation:
+            return apology("Missing field", 400)
+
+        #check new password confimation:
+        if new_password != password_confirmation:
+            return apology("new password confirmation failed")
+
+        #chech if new password is the same with current password
+        if input_password == new_password :
+            return apology("your new password can not be the same with the previous", 400)
+
+        #check if current password is what user entered
+        if not check_password_hash(user_current_password_hash[0]["hash"],input_password):
+            return apology("Your input password is not match with our DB", 400)
+        else:
+            db.execute("UPDATE users SET hash = ?", new_password_hash )
+            flash("Password has been changed")
+            return redirect("/")
+    else:
+        return render_template("change.html")
+
+
+@app.route("/result", methods=['POST', 'GET'])
+@login_required
+def result():
+    # User reached route via POST (as by submitting a form via POST)
+    if request.method == "POST":
+        slider1 = request.form.get('slider1')
+        slider2 = request.form.get('slider2')
+        slider3 = request.form.get('slider3')
+        slider4 = request.form.get('slider4')
+        slider5 = request.form.get('slider5')
+        slider6 = request.form.get('slider6')
+        slider7 = request.form.get('slider7')
+        slider8 = request.form.get('slider8')
+        slider9 = request.form.get('slider9')
+        slider10 = request.form.get('slider10')
+        slider11 = request.form.get('slider11')
+        slider12 = request.form.get('slider12')
+        slider13 = request.form.get('slider13')
+        slider14 = request.form.get('slider14')
+        slider15 = request.form.get('slider15')
+        slider16 = request.form.get('slider16')
+        slider17 = request.form.get('slider17')
+        slider18 = request.form.get('slider18')
+        slider19 = request.form.get('slider19')
+        slider20 = request.form.get('slider20')
+        slider21 = request.form.get('slider21')
+        slider22 = request.form.get('slider22')
+        slider23 = request.form.get('slider23')
+        slider24 = request.form.get('slider24')
+        slider25 = request.form.get('slider25')
+        slider26 = request.form.get('slider26')
+        slider27=  request.form.get('slider27')
+        slider28 = request.form.get('slider28')
+        slider29 = request.form.get('slider29')
+        slider30 = request.form.get('slider30')
+        slider31 = request.form.get('slider31')
+        slider32 = request.form.get('slider32')
+        slider33 = request.form.get('slider33')
+        slider34 = request.form.get('slider34')
+        slider35 = request.form.get('slider35')
+        slider36 = request.form.get('slider36')
+        slider37 = request.form.get('slider37')
+        slider38 = request.form.get('slider38')
+        slider39 = request.form.get('slider39')
+        slider40 = request.form.get('slider40')
+        slider41 = request.form.get('slider41')
+        slider42 = request.form.get('slider42')
+        slider43 = request.form.get('slider43')
+        slider44 = request.form.get('slider44')
+        slider45 = request.form.get('slider45')
+        slider46 = request.form.get('slider46')
+        slider47 = request.form.get('slider47')
+        slider48 = request.form.get('slider48')
+        slider49 = request.form.get('slider49')
+        slider50 = request.form.get('slider50')
+
+        E= 20+ int(slider1) - int(slider6) + int(slider11) - int(slider16) + int(slider21) - int(slider26) + int(slider31) - int(slider36) + int(slider41) - int(slider46)
+        A= 14- int(slider2) + int(slider7) - int(slider12) + int(slider17) - int(slider22) + int(slider27) - int(slider32) + int(slider37) + int(slider42) + int(slider47)
+        C = 14 + int(slider3) - int(slider8) + int(slider13) - int(slider18) + int(slider23) - int(slider28) + int(slider33) - int(slider38) + int(slider43) + int(slider48)
+        N =38- int(slider4) + int(slider9) - int(slider14) + int(slider19) - int(slider24) - int(slider29) - int(slider34) - int(slider39) - int(slider44) - int(slider49)
+        O= 8 + int(slider5) - int(slider10) + int(slider15) - int(slider20) + int(slider25) - int(slider30) + int(slider35) + int(slider40) + int(slider45) + int(slider50)
+
+        E1 = round((E/40)*100,2)
+        A1 = round((A/40)*100,2)
+        C1 = round((C/40)*100,2)
+        N1 = round((N/40)*100,2)
+        O1 = round((O/40)*100,2)
+
+        E2 = round((E/200)*100,2)
+        A2 = round((A/200)*100,2)
+        C2 = round((C/200)*100,2)
+        N2 = round((N/200)*100,2)
+        O2 = round((O/200)*100,2)
+
+        return render_template("result.html" , E2=E2, A2=A2, C2=C2, N2=N2, O2=O2, E1=E1, A1=A1, C1=C1, N1=N1, O1=O1)
+    else:
+        redirect("/")
+
+@app.route("/persontype", methods=["GET", "POST"])
+@login_required
+def persontype():
+    if request.method == "POST":
+        return render_template("information.html")
+    else:
+        return render_template("information.html")
+
+@app.route("/openess", methods=["GET", "POST"])
+@login_required
+def openess():
+    if request.method == "POST":
+        return render_template("openess.html")
+    else:
+        return render_template("openess.html")
+
+@app.route("/conscientiousness", methods=["GET", "POST"])
+@login_required
+def conscientiousness():
+    if request.method == "POST":
+        return render_template("conscientiousness.html")
+    else:
+        return render_template("conscientiousness.html")
+
+@app.route("/extraversion", methods=["GET", "POST"])
+@login_required
+def extraversion():
+    if request.method == "POST":
+        return render_template("extraversion.html")
+    else:
+        return render_template("extraversion.html")
+
+@app.route("/agreeableness", methods=["GET", "POST"])
+@login_required
+def agreeableness():
+    if request.method == "POST":
+        return render_template("agreeableness.html")
+    else:
+        return render_template("agreeableness.html")
+
+@app.route("/neuroticism", methods=["GET", "POST"])
+@login_required
+def neuroticism():
+    if request.method == "POST":
+        return render_template("neuroticism.html")
+    else:
+        return render_template("neuroticism.html")
+
+@app.route("/test", methods=["GET", "POST"])
+@login_required
+def test():
+    if request.method == "POST":
+        return redirect("/")
+    else:
+        return redirect("/")
+
+
+@app.route("/resource", methods=["GET", "POST"])
+@login_required
+def resource():
+    if request.method == "POST":
+        return render_template("resource.html")
+    else:
+        return render_template("resource.html")
+
+@app.route("/fivemins", methods=["GET", "POST"])
+@login_required
+def fivemins():
+    if request.method == "POST":
+        return render_template("fivemins.html")
+    else:
+        return render_template("fivemins.html")
+
+
+@app.route("/resulttwo", methods=['POST', 'GET'])
+@login_required
+def resulttwo():
+    # User reached route via POST (as by submitting a form via POST)
+    if request.method == "POST":
+        slider111 = request.form.get('slider111')
+        slider211 = request.form.get('slider211')
+        slider311 = request.form.get('slider311')
+        slider411 = request.form.get('slider411')
+        slider511 = request.form.get('slider511')
+        slider611 = request.form.get('slider611')
+        slider711 = request.form.get('slider711')
+        slider811 = request.form.get('slider811')
+        slider911 = request.form.get('slider911')
+        slider1011 = request.form.get('slider1011')
+        slider1111 = request.form.get('slider1111')
+        slider1211 = request.form.get('slider1211')
+        slider1311 = request.form.get('slider1311')
+        slider1411 = request.form.get('slider1411')
+        slider1511 = request.form.get('slider1511')
+        slider1611 = request.form.get('slider1611')
+        slider1711 = request.form.get('slider1711')
+        slider1811 = request.form.get('slider1811')
+        slider1911 = request.form.get('slider1911')
+        slider2011 = request.form.get('slider2011')
+        slider2111 = request.form.get('slider2111')
+        slider2211 = request.form.get('slider2211')
+        slider2311 = request.form.get('slider2311')
+        slider2411 = request.form.get('slider2411')
+        slider2511 = request.form.get('slider2511')
+        slider2611 = request.form.get('slider2611')
+        slider2711= request.form.get('slider2711')
+        slider2811 = request.form.get('slider2811')
+        slider2911 = request.form.get('slider2911')
+        slider3011 = request.form.get('slider3011')
+        slider3111 = request.form.get('slider3111')
+        slider3211 = request.form.get('slider3211')
+        slider3311 = request.form.get('slider3311')
+        slider3411 = request.form.get('slider3411')
+        slider3511 = request.form.get('slider3511')
+        slider3611 = request.form.get('slider3611')
+        slider3711 = request.form.get('slider3711')
+        slider3811 = request.form.get('slider3811')
+        slider3911 = request.form.get('slider3911')
+        slider4011 = request.form.get('slider4011')
+
+
+
+        L1= int(slider2911) + int(slider2511) + int(slider2111) +int(slider1711) + int(slider1311)  + int(slider911) +int(slider511) + int(slider111) +int(slider3311)+ int(slider3711)
+        O1 = int(slider211) + int(slider611) + int(slider1011) + int(slider1411) + int(slider1811) + int(slider2211) + int(slider2611) + int(slider3011) + int(slider3411) + int(slider3811)
+        G1 = int(slider311) + int(slider711) + int(slider1111) + int(slider1511) + int(slider1911) + int(slider2311) + int(slider2711) + int(slider3111) + int(slider3511) + int(slider3911)
+        B1 = int(slider411) + int(slider811) + int(slider1211) + int(slider1611) + int(slider2011) + int(slider2411) + int(slider2811) + int(slider3211) + int(slider3611) + int(slider4011)
+
+        L =round(100*((L1-20)/20),2)
+        O= round(100*((O1-20)/20),2)
+        G =round(100*((G1-20)/20),2)
+        B =round(100*((B1-20)/20),2)
+
+        return render_template("resulttwo.html" , L=L, O=O, G=G, B=B)
+    else:
+        redirect("/")
+
+
+@app.route("/aboutanimal", methods=["GET", "POST"])
+@login_required
+def aboutanimal():
+    if request.method == "POST":
+        return render_template("aboutanimal.html")
+    else:
+        return render_template("aboutanimal.html")
